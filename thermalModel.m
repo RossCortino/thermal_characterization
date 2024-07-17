@@ -2,25 +2,25 @@ classdef thermalModel < handle
 
     properties
 
-        Rwa % [
-        Rha
-        Rwh
-        Cha
-        Cwa
+        Rwa % [C/W], winding-to-ambient resistance
+        Rha % [C/W], housing-to-ambient resistance
+        Rwh % [C/W], winding-to-housing resistance
+        Cha % [J/C], housing capacitance
+        Cwa % [J/C], winding capacitance
 
-        t_train
-        q_train
-        active_train
-        inactive_train
-        housing_train
-        T_ambient_train
+        t_train % [s], time vector used to train model
+        q_train % [W], heat input vector (i^2*R) used to train model
+        active_train % [C], active (hot) phase winding temperature used to train model
+        inactive_train % [C], inactive (cool) phase winding temperature used to train model
+        housing_train % [C], housing temperature used to train model
+        T_ambient_train % [C], ambient temperature used to train model
 
-        TW_data_train
-        TH_data_train
+        TW_data_train % [C], total winding temperature used to train model
+        TH_data_train % [C], total housing temperature used to train model
 
-        weight_W_train
+        weight_W_train % normalized weight attributed to winding RMSE when training model
 
-        train_error
+        train_error % weighted sum of winding and housing temperature model RMSE at training solution
 
     end
 
@@ -28,12 +28,6 @@ classdef thermalModel < handle
 
         function obj = thermalModel
             % thermalModel  model of motor thermal properties
-            %   Rwa: winding-ambient resistance
-            %   Rha: housing-ambient resistance
-            %   Rwh: winding-housing resistance
-            %   Cha: housing-ambient capacitance
-            %   Cwa: winding-ambient capacitance
-
             return
 
         end
@@ -52,38 +46,54 @@ classdef thermalModel < handle
         end
 
         function [TW, TH] = simulate(self, t, q, T_ambient)
-            % simulate  simulate thermal model
+            % simulate thermal model
             %   Inputs:
             %       t: n-element time vector
             %       q: n-element heat energy vector (i^2*r)
             %       T_ambient: scalar ambient temperature [Celsius]
-            %       train_test: indicator; 0=none, 1=train, 2=test
             %   Outputs:
             %       TW: n-element vector of winding temperature
             %       TH: n-element vector of housing temperature
 
-
             s = tf('s');
+
+            % winding transfer function
             QsysW = 1/self.Rwa + 1/(self.Rwh + self.Rha/(self.Cha*self.Rha*s + 1)) + self.Cwa*s;
             TsysW = 1/QsysW;
         
+            % housing transfer function
             QsysH = (self.Rwh + self.Rha*self.Rwh*self.Cha*s + self.Rha)/(self.Rwa*self.Rha) + ...
                 1/self.Rha + self.Cha*s + ...
                 (self.Rwh*self.Cwa*s + self.Rha*self.Rwh*self.Cha*self.Cwa*s^2 + self.Rha*self.Cwa*s)/self.Rha;
             TsysH = 1/QsysH;
 
+            % simulate systems with provided heat input (q) and add ambient to get absolute temperature
             TW = lsim(TsysW, q, t) + T_ambient;
             TH = lsim(TsysH, q, t) + T_ambient;
 
         end
 
         function model_error = test(self, t, q, active, inactive, housing, T_ambient, weight_W, plot_bool)
+            % test thermal model parameterization against measured temperatures
+            %   Inputs:
+            %       t: n-element time vector
+            %       q: n-element heat energy vector (i^2*r)
+            %       active: n-element active winding phase temperature vector
+            %       inactive: n-element inactive winding phase temperature vector
+            %       housing: n-element housing temperature vector
+            %       T_ambient: scalar ambient temperature [Celsius]
+            %       weight_W: normalized [0,1] weight of winding RMSE relative to housing RMSE in error calculation
+            %   Outputs:
+            %       model_error: weighted sum of weighted sum of winding and housing temperature model RMSE
 
-            [TW_model, TH_model] = self.simulate(t, q, T_ambient);
+            [TW_model, TH_model] = self.simulate(t, q, T_ambient); % simulate the model with current parameterization
 
-            TW_data = (active + 2*inactive)/3;
+            TW_data = (active + 2*inactive)/3; % average active/inactive phases into single winding temperature
+            % TW_data = (2*active + inactive)/3; NOTE: above calculation is for Dela wound motors; this is for Wye
+
             TH_data = housing;
 
+            % plot measured and modeled temperature trajectories
             if plot_bool
                 figure(plot_bool);
                 if ~isempty(TW_data)
@@ -102,7 +112,7 @@ classdef thermalModel < handle
                 ylabel('Temperature (C)');
             end
 
-            model_error = self.model_RMSE(TW_model, TH_model, TW_data, TH_data, weight_W);
+            model_error = self.model_RMSE(TW_model, TH_model, TW_data, TH_data, weight_W); % compute weighted sum RMSE
 
         end
 
